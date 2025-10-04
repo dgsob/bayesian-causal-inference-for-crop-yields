@@ -1,0 +1,8 @@
+data:
+  target_dir: "./data/raw"
+  processed_dir: "./data/processed"
+  crop_type: "Corn"
+  fips_codes: ["19001", "19003", "19005", "19007", "19009"]  # Subset
+  years: ["2017", "2018", "2019", "2020", "2021", "2022"]
+  irrigation_proxy_threshold: 25  # [mm] summer precip for low-water proxy; tune
+  profile_report: true

@@ -6,6 +6,9 @@ pkgs.mkShell {
       numpy
       pandas
       matplotlib
+      pyarrow
+      ydata-profiling
+      pyyaml
     ]))
   ];
 
