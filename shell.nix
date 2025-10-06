@@ -9,6 +9,8 @@ pkgs.mkShell {
       pyarrow
       ydata-profiling
       pyyaml
+      pymc
+      optuna
     ]))
   ];
 

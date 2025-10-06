@@ -1,0 +1,8 @@
+model:
+  class_weight_scale: 1.0
+  n_chains: 4
+  n_draws: 2000
+  n_trials: 50
+  prior_mean: 0.7640534417008239
+  prior_var: 0.10084529208729814
+  refutation_placebo: true
