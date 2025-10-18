@@ -143,6 +143,8 @@ def load_crop_yields(config):
 def merge_datasets(yields_df, ratio_df, config):
     """
     Merge crop yields with cover crop ratios on fips and year.
+    Aggregate yields across crops by mean per fips-year to combine all crops.
+    Drop crop column.
     Produces processed dataset ready for modeling (yield ~ ratio + future confounders).
     Optional: Generate profile report if config["profile_report"] is True.
     """
@@ -150,7 +152,12 @@ def merge_datasets(yields_df, ratio_df, config):
         logging.warning("Empty input DataFrames; returning empty merged DF")
         return pd.DataFrame()
     
-    merged_df = yields_df.merge(ratio_df[['fips', 'year', 'cover_crop_ratio']], on=['fips', 'year'], how='inner')
+    # First aggregate yields across crops per fips-year
+    aggregated_yields = yields_df.groupby(['fips', 'year'])['yield_bushels_acre'].mean().reset_index()
+    aggregated_yields.rename(columns={'yield_bushels_acre': 'yield_bushels_acre_combined'}, inplace=True)
+    
+    # Merge with ratios
+    merged_df = aggregated_yields.merge(ratio_df[['fips', 'year', 'cover_crop_ratio']], on=['fips', 'year'], how='inner')
     
     if config.get("profile_report", False):
         profile = ProfileReport(merged_df, title=f"{config['state']} Crops Profile", explorative=True, minimal=True)
@@ -161,7 +168,7 @@ def merge_datasets(yields_df, ratio_df, config):
     processed_dir.mkdir(parents=True, exist_ok=True)
     merged_df.to_csv(processed_dir / f"{config['state'].lower()}_crops_processed.csv", index=False)
     
-    logging.info(f"Merged dataset: {len(merged_df)} rows saved")
+    logging.info(f"Merged dataset: {len(merged_df)} rows saved (aggregated across crops)")
     return merged_df
 
 
@@ -190,6 +197,9 @@ def create_time_series_splits(processed_df, config):
     
     logging.info(f"Splits created: Train {len(train_df)} rows ({train_df['year'].min()}-{train_df['year'].max()}), "
                  f"Test {len(test_df)} rows ({test_df['year'].min()}-{test_df['year'].max()})")
+    
+    # For future scalability: if more years, implement rolling windows
+    # e.g., for i in range(len(years)-2): train = years[:i+1], val=years[i+1], test=years[i+2]
 
 
 def run_pipeline():
@@ -207,7 +217,7 @@ def run_pipeline():
     
     if not processed_df.empty:
         print(f"Pipeline complete: {len(processed_df)} processed rows.")
-        print(f"Unique fips: {processed_df['fips'].nunique()}, Crops: {sorted(processed_df['crop'].unique())}")
+        print(f"Unique fips: {processed_df['fips'].nunique()}")
     else:
         print("Pipeline warning: No data processed; check logs for issues.")
 
