@@ -3,7 +3,7 @@ model:
   n_chains: 4
   n_draws: 100
   n_trials: 1
-  prior_mean: 0.1528517688631449
-  prior_var: 1.9060252254566838
+  prior_mean: -0.19505649014045545
+  prior_var: 0.8433292626758995
   refutation_placebo: true
-  u_var: 4.538320227888878
+  u_var: 1.2407931795184206
