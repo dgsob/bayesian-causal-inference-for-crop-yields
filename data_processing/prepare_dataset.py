@@ -14,6 +14,7 @@ def load_config():
     """
     Load configuration from YAML file.
     Expects keys: target_dir, processed_dir, state, focus_years, crops, fips_codes, counties (with 'iowa_fips' dict).
+    Adds defaults: season_months=[5,10] for growing season.
     """
     config_path = Path("configs/data_config.yaml")
     if not config_path.exists():
@@ -22,7 +23,106 @@ def load_config():
         data_config = yaml.safe_load(f)["data"]
     # Normalize county names to uppercase for mapping
     data_config["counties_iowa_upper"] = {k.upper(): v for k, v in data_config["counties"]["iowa_fips"].items()}
+    # Default growing season
+    if "season_months" not in data_config:
+        data_config["season_months"] = [5, 10]
     return data_config
+
+
+def load_weather(config):
+    """
+    Load HRRR weather from monthly CSVs, aggregate growing-season vars per fips-year,
+    add lagged versions (shift by 1 year per fips), filter to config fips_codes.
+    Focus vars: precip (sum), avg/max temp (mean), VPD (mean). Handles missing files/NAs.
+    """
+    target_dir = Path(config["target_dir"])
+    weather_dfs = []
+    
+    for year in config["focus_years"]:
+        year_path = target_dir / "hrrr" / str(year) / "IA"
+        if not year_path.exists():
+            logging.warning(f"HRRR dir not found: {year_path}")
+            continue
+        
+        monthly_dfs = []
+        for month in range(1, 13):
+            file_path = year_path / f"HRRR_19_IA_{year}-{month:02d}.csv"
+            if not file_path.exists():
+                logging.warning(f"HRRR file not found: {file_path}")
+                continue
+            
+            try:
+                df_month = pd.read_csv(file_path, encoding='utf-8')
+                logging.info(f"Loaded {file_path}: shape {df_month.shape}")
+                
+                # Filter by state if present
+                if 'State' in df_month.columns:
+                    df_month = df_month[df_month['State'] == config["state"]]
+                
+                # Standardize fips (assume 'FIPS Code' is 5-digit str)
+                df_month['fips'] = df_month['FIPS Code'].astype(str).str.zfill(5)
+                df_month['year'] = int(year)
+                df_month['month'] = month
+                
+                # Create date for season filter
+                if 'Day' in df_month.columns and 'Month' in df_month.columns:
+                    df_month['date'] = pd.to_datetime(df_month[['year', 'month', 'Day']])
+                    season_mask = df_month['date'].dt.month.between(config["season_months"][0], config["season_months"][1])
+                    df_season_month = df_month[season_mask]
+                else:
+                    # If no Day, assume monthly and filter months directly
+                    month_mask = df_month['month'].between(config["season_months"][0], config["season_months"][1])
+                    df_season_month = df_month[month_mask]
+                
+                if not df_season_month.empty:
+                    monthly_dfs.append(df_season_month)
+                
+            except Exception as e:
+                logging.error(f"Error processing {file_path}: {e}")
+        
+        if monthly_dfs:
+            df_year = pd.concat(monthly_dfs, ignore_index=True)
+            
+            # Aggregate per fips-year (handle NAs: fillna(0) post-agg)
+            agg_dict = {
+                'Avg Temperature (K)': 'mean',
+                'Max Temperature (K)': 'mean',
+                'Precipitation (kg m**-2)': 'sum',
+                'Vapor Pressure Deficit (kPa)': 'mean'
+            }
+            df_agg = df_year.groupby(['fips', 'year']).agg(agg_dict).reset_index()
+            df_agg.columns = ['fips', 'year', 'avg_temp_mean', 'max_temp_mean', 'precip_sum', 'vpd_mean']
+            
+            # Fill NAs
+            df_agg[['avg_temp_mean', 'max_temp_mean', 'vpd_mean']] = df_agg[['avg_temp_mean', 'max_temp_mean', 'vpd_mean']].fillna(df_agg[['avg_temp_mean', 'max_temp_mean', 'vpd_mean']].mean())
+            df_agg['precip_sum'] = df_agg['precip_sum'].fillna(0)
+            
+            # Filter to fips_codes
+            if config["fips_codes"]:
+                df_agg = df_agg[df_agg['fips'].isin(config["fips_codes"])]
+            
+            if not df_agg.empty:
+                weather_dfs.append(df_agg)
+                logging.info(f"Aggregated HRRR {year}: {len(df_agg)} rows")
+    
+    if weather_dfs:
+        weather_df = pd.concat(weather_dfs, ignore_index=True)
+        weather_df = weather_df.sort_values(['fips', 'year'])
+        
+        # Add lagged features (prior year per fips)
+        for col in ['avg_temp_mean', 'max_temp_mean', 'precip_sum', 'vpd_mean']:
+            weather_df[f'{col}_lag1'] = weather_df.groupby('fips')[col].shift(1)
+            # Fill lag NAs with current or global mean (for 2017)
+            weather_df[f'{col}_lag1'] = weather_df[f'{col}_lag1'].fillna(weather_df[col])
+        
+        processed_dir = Path(config["processed_dir"])
+        processed_dir.mkdir(parents=True, exist_ok=True)
+        weather_df.to_csv(processed_dir / "weather_features.csv", index=False)
+        logging.info(f"Weather features: {len(weather_df)} rows saved with lags")
+        return weather_df
+    else:
+        logging.warning("No weather data loaded")
+        return pd.DataFrame()
 
 
 def compute_cover_ratios(config):
@@ -140,17 +240,20 @@ def load_crop_yields(config):
         return pd.DataFrame()
 
 
-def merge_datasets(yields_df, ratio_df, config):
+def merge_datasets(yields_df, ratio_df, weather_df, config):
     """
-    Merge crop yields with cover crop ratios on fips and year.
+    Merge crop yields with cover crop ratios and weather (current + lagged) on fips and year.
     Aggregate yields across crops by mean per fips-year to combine all crops.
     Drop crop column.
-    Produces processed dataset ready for modeling (yield ~ ratio + future confounders).
+    Produces processed dataset ready for modeling (yield ~ ratio + weather confounders).
     Optional: Generate profile report if config["profile_report"] is True.
     """
     if yields_df.empty or ratio_df.empty:
-        logging.warning("Empty input DataFrames; returning empty merged DF")
+        logging.warning("Empty yields or ratio DataFrames; returning empty merged DF")
         return pd.DataFrame()
+    
+    if weather_df.empty:
+        logging.warning("Empty weather DataFrame; merging without weather")
     
     # First aggregate yields across crops per fips-year
     aggregated_yields = yields_df.groupby(['fips', 'year'])['yield_bushels_acre'].mean().reset_index()
@@ -158,6 +261,14 @@ def merge_datasets(yields_df, ratio_df, config):
     
     # Merge with ratios
     merged_df = aggregated_yields.merge(ratio_df[['fips', 'year', 'cover_crop_ratio']], on=['fips', 'year'], how='inner')
+    
+    # Merge with weather (current + lags)
+    if not weather_df.empty:
+        weather_cols = [col for col in weather_df.columns if col not in ['fips', 'year']]
+        merged_df = merged_df.merge(weather_df[['fips', 'year'] + weather_cols], on=['fips', 'year'], how='left')
+        # Fill any new NAs with means
+        num_cols = merged_df.select_dtypes(include=[np.number]).columns
+        merged_df[num_cols] = merged_df[num_cols].fillna(merged_df[num_cols].mean())
     
     if config.get("profile_report", False):
         profile = ProfileReport(merged_df, title=f"{config['state']} Crops Profile", explorative=True, minimal=True)
@@ -168,7 +279,7 @@ def merge_datasets(yields_df, ratio_df, config):
     processed_dir.mkdir(parents=True, exist_ok=True)
     merged_df.to_csv(processed_dir / f"{config['state'].lower()}_crops_processed.csv", index=False)
     
-    logging.info(f"Merged dataset: {len(merged_df)} rows saved (aggregated across crops)")
+    logging.info(f"Merged dataset: {len(merged_df)} rows saved (aggregated across crops, with weather)")
     return merged_df
 
 
@@ -197,22 +308,20 @@ def create_time_series_splits(processed_df, config):
     
     logging.info(f"Splits created: Train {len(train_df)} rows ({train_df['year'].min()}-{train_df['year'].max()}), "
                  f"Test {len(test_df)} rows ({test_df['year'].min()}-{test_df['year'].max()})")
-    
-    # For future scalability: if more years, implement rolling windows
-    # e.g., for i in range(len(years)-2): train = years[:i+1], val=years[i+1], test=years[i+2]
 
 
 def run_pipeline():
     """
     Main pipeline orchestrator.
-    Loads config, computes ratios, loads yields, merges, creates splits.
+    Loads config, computes ratios, loads yields and weather, merges, creates splits.
     Handles messy data (NAs, filtering) and ensures reproducibility via config.
     Ready for scale-up: add modules for confounders (e.g., weather merge), hyperparam tuning, etc.
     """
     config = load_config()
     ratio_df = compute_cover_ratios(config)
     yields_df = load_crop_yields(config)
-    processed_df = merge_datasets(yields_df, ratio_df, config)
+    weather_df = load_weather(config)
+    processed_df = merge_datasets(yields_df, ratio_df, weather_df, config)
     create_time_series_splits(processed_df, config)
     
     if not processed_df.empty:
