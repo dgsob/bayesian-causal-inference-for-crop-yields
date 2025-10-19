@@ -16,7 +16,7 @@ def load_trace():
     return trace, config
 
 def generate_summary(trace, config):
-    reports_dir = Path("reports")
+    reports_dir = Path("results")
     reports_dir.mkdir(exist_ok=True)
     
     # ATE Posterior: Density with HDI, null line

@@ -52,7 +52,7 @@ def main():
         run_script("modeling/tune_priors.py")
 
     run_script("modeling/estimate_ate.py")
-    run_script("reports/summary.py")
+    run_script("results/summary.py")
 
     print("Pipeline completed successfully!")
 
