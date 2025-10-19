@@ -285,20 +285,29 @@ def merge_datasets(yields_df, ratio_df, weather_df, config):
 
 def create_time_series_splits(processed_df, config):
     """
-    Create walk-forward splits for time series data.
-    With focus_years=["2017","2022"], uses 2017 as train, 2022 as test (no validation due to limited years).
+    Create splits by randomly dividing counties (fips) across both years, 
+    with ~80% in train and ~20% in test. This ensures train has most data from 
+    both 2017 and 2022, while test has remaining parts from both years.
     Saves to splits_dir as CSV files for scalability.
-    Modular for future years: extend by sorting years and expanding windows.
     """
     if processed_df.empty:
         return
     
-    processed_df['year'] = pd.to_numeric(processed_df['year'])
-    years = sorted(processed_df['year'].unique())
+    # Set seed for reproducibility
+    np.random.seed(42)
     
-    # For current focus_years, simple split; scalable to walk-forward for more years
-    train_df = processed_df[processed_df['year'] == 2017]
-    test_df = processed_df[processed_df['year'] == 2022]
+    # Get unique fips across all data
+    unique_fips = processed_df['fips'].unique()
+    n_fips = len(unique_fips)
+    n_train = int(0.8 * n_fips)
+    
+    # Randomly select train fips (without replacement)
+    train_fips = np.random.choice(unique_fips, n_train, replace=False)
+    test_fips = np.setdiff1d(unique_fips, train_fips)
+    
+    # Split dataframes based on fips
+    train_df = processed_df[processed_df['fips'].isin(train_fips)].copy()
+    test_df = processed_df[processed_df['fips'].isin(test_fips)].copy()
     
     splits_dir = Path(config["processed_dir"]) / "splits"
     splits_dir.mkdir(exist_ok=True)
@@ -306,8 +315,8 @@ def create_time_series_splits(processed_df, config):
     train_df.to_csv(splits_dir / "train.csv", index=False)
     test_df.to_csv(splits_dir / "test.csv", index=False)
     
-    logging.info(f"Splits created: Train {len(train_df)} rows ({train_df['year'].min()}-{train_df['year'].max()}), "
-                 f"Test {len(test_df)} rows ({test_df['year'].min()}-{test_df['year'].max()})")
+    logging.info(f"Splits created: Train {len(train_df)} rows ({train_df['year'].min()}-{train_df['year'].max()}) from {len(train_fips)} counties, "
+                 f"Test {len(test_df)} rows ({test_df['year'].min()}-{test_df['year'].max()}) from {len(test_fips)} counties")
 
 
 def run_pipeline():

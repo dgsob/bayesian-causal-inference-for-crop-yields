@@ -1,9 +1,11 @@
 model:
   class_weight_scale: 1.0
+  max_treedepth: 12
   n_chains: 4
-  n_draws: 100
-  n_trials: 1
-  prior_mean: -0.19505649014045545
-  prior_var: 0.8433292626758995
+  n_draws: 1000
+  n_trials: 5
+  prior_mean: 0.42094142429167847
+  prior_var: 1.9940708592467702
   refutation_placebo: true
-  u_var: 1.2407931795184206
+  target_accept: 0.95
+  u_var: 3.4707724509517965
