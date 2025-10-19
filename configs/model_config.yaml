@@ -4,8 +4,8 @@ model:
   n_chains: 4
   n_draws: 1000
   n_trials: 5
-  prior_mean: -0.4071234184212288
-  prior_var: 0.6467329550924543
+  prior_mean: 0.42094142429167847
+  prior_var: 1.9940708592467702
   refutation_placebo: true
   target_accept: 0.95
-  u_var: 3.748353982441549
+  u_var: 3.4707724509517965
